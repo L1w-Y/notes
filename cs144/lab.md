@@ -1,69 +1,48 @@
-Today I’d like to talk about **some key bottlenecks that are holding back the development of autonomous driving**. While the technology has come a long way, there are still major challenges we need to overcome—especially when it comes to perception and sensing.
+## LAB 1
 
-今天我想和大家分享的是 **无人驾驶的瓶颈技术**。虽然技术已经取得了长足进展，但我们仍然面临着一些挑战，尤其是在感知和传感方面。
+### 实验要求
+lab0 实现的Bytestream双向字节流，作为传输通道
+lab1主要是让我们实现一个streamReassemler类，也就是流重组器。
 
-### 1. **Visual Perception Is Still the Biggest Challenge**
+对于**TCP发送端**来说，在数据发送过程中，下层网络层对单个数据包有一个最大尺寸限制，叫做 MTU（最大传输单元）。
+* 对于大多数以太网网络，MTU 大约是 1500 字节
+* 但在 IP 层中，TCP 头占 20 字节，IP 头也占 20 字节
+* 所以留给 TCP 有效负载（也就是实际要传的数据） 的空间最多是：1500 - 20 (IP) - 20 (TCP) = 1460 字节
 
-One of the toughest technical problems is improving how self-driving cars **see and understand the world**, just like humans do.
+所以在数据来到接收端的时候，会出现乱序、重复或部分丢失的问题，对于**TCP接收方**来说，就需要将这些 TCP 段重新组装成一个完整、有序的字节流，供上层应用读取。
+这个streamReassemler用来实现这样的功能。
 
-Right now, computer vision systems are still relatively limited. In unexpected situations—like when a pedestrian suddenly walks into the road—many systems, including lidar, **struggle to react in time**.
+课程给的实验文档相当谜语人:
+>>**What should the Reassembler store internally?**
+>> The insert method informs the Reassembler about a new excerpt of the ByteStream, and where it fits in the overall stream (the index of the beginning of the substring)
+>>
+>> In principle, then, the Reassembler will have to handle three categories of knowledge:
+>>1. Bytes that are the next bytes in the stream. The Reassembler should push these to the stream (output.writer()) as soon as they are known.
+>>2. Bytes that fit within the stream’s available capacity but can’t yet be written, because earlier bytes remain unknown. These should be stored internally in the Reassembler.
+>>3. Bytes that lie beyond the stream’s available capacity. These should be discarded. The Reassembler’s will not store any bytes that can’t be pushed to the ByteStream either immediately, or as soon as earlier bytes become known.
+>>
+>> The goal of this behavior is to limit the amount of memory used by the Reassembler and ByteStream, no matter how the incoming substrings arrive. We’ve illustrated this in the picture below. The “capacity” is an upper bound on both:
+ >>1. The number of bytes buffered in the reassembled ByteStream (shown in green)
+ >>2. The number of bytes that can be used by “unassembled” substrings (shown in red)
 
-This limitation in vision directly affects both the safety and decision-making abilities of autonomous vehicles.
+其实想表达的就是StreamReassembler需要处理三类数据
+1. **可立即写入的字节**  
+   这些是当前期望的下一个字节（ `_next_index`）。一旦收到，应立即通过 `ByteStream` 的 `writer()` 写入。
 
-其中一个最具挑战性的技术问题是如何提升自动驾驶汽车的**视觉能力**，使其能够像人类一样**看懂世界**。
+2. **尚未可写的字节**  
+   这些字节的索引高于 `_next_index`，但低于 `_next_index + capacity`。由于前面的字节尚未到达，这些字节暂时无法写入，应在内部缓冲区中存储，待前面的字节到达后再写入。
 
-目前，计算机视觉系统仍然相对有限。在一些突发情况下——例如行人突然出现在路上——许多系统，包括激光雷达，**难以及时作出反应**。
+3. **超出容量的字节**  
+   这些字节的索引高于 `_next_index + capacity`。由于超出 `ByteStream` 的容量限制，应立即丢弃，不予存储。
 
-这种视觉能力的局限直接影响到自动驾驶汽车的安全性和决策能力。
-
-
-### 2. **Perceiving the Environment Is Extremely Complex**
-
-Seeing clearly isn't enough. A self-driving car needs to:
-
-*   **Understand what it sees**—like pedestrians, lanes, stop lines, traffic signs, and lights.
-*   **Predict what might happen next**—for example, is the lane going to end? Is that car pulling over?
-
-And things get even trickier in bad weather or poor lighting. In snow, fog, or when shadows cover the road, important lane markings might disappear, and the car can easily get confused or make the wrong decisions.
-
-仅仅看清楚是不够的。自动驾驶汽车需要：
-
-*   **理解它看到的**——如行人、车道、停止线、交通标志和信号灯等。
-*   **预测接下来可能发生的事情**——例如，车道是否会结束？那辆车是否在停车？
-
-在恶劣天气或光线不佳的情况下，情况会更加复杂。在雪天、雾霾或阴影遮挡下，重要的车道标记可能会消失，汽车很容易会感到困惑或做出错误的决策。
-
-### 3. **Current Sensor Systems Have Limitations**
-Let’s talk a bit about the sensors, which are basically the "eyes" of an autonomous vehicle. Each has its strengths and weaknesses:
-
-1.  **Cameras**
-    *   They're sensitive to lighting, angles, and even dirt on the lens;
-    *   Images can be low-quality or blurry, which hurts detection accuracy;
-    *   They often lack real-time responsiveness and struggle in tough environments.
-  
-2.  **Radar**
-    *   Not very effective in bad weather like rain, snow, or fog;
-    *   Has blind spots and can't give a complete picture of the surroundings.
-3.  **Lidar**
-    *   Offers high precision and fast response—currently one of the best sensors out there;
-    *   But the cost is still extremely high, which makes it hard to use on a large scale.
-
-现在我们来谈谈传感器，它们基本上是自动驾驶汽车的“眼睛”。每种传感器都有其优缺点：
-1.  **相机**
-    *   对光线、角度甚至镜头上的灰尘非常敏感；
-    *   图像可能质量低或模糊，影响识别精度；
-    *   实时响应能力差，且在复杂环境中表现不佳。
-  
-2.  **雷达**
-    *   在恶劣天气（如雨雪或雾霾）下效果不佳；
-    *   有盲区，不能提供完整的周围环境图像。
- 
-3.  **激光雷达**
-    *   提供高精度和快速响应——目前是最先进的传感器之一；
-    *   但其成本仍然非常高，这限制了它的大规模应用。
-### 4. **Sensor Bottlenecks Affect the Entire System**
-Since sensors are the core of perception, **any weaknesses here directly impact the whole autonomous system**.
-For example, if a camera produces poor-quality images, the navigation and obstacle-avoidance systems can make wrong decisions. And in autonomous driving, **one bad decision can have serious consequences**.
-
-由于传感器是感知系统的核心，**任何传感器的弱点都会直接影响整个自动驾驶系统**。
-例如，如果相机拍摄的图像质量差，导航和避障系统可能会做出错误的决策。而在自动驾驶中，**一次错误的决策可能会带来严重后果**。
+看下面的图片：
+![alt text](image.png)
+紫色区域：ByteStream中整流完毕的数据，并且已经pop(上层应用读取)
+绿色区域：存储在ByteStream已经整流但未被读取的数据，占用Bytestream容量
+红色区域：存储在StreamReassembler中未整流的数据，占用StreamReassembler容量
+### FAQs
+* **ByteStream** 和 **StreamReassembler** 的总容量有固定的限制
+* 
+* 接收数据的每个字节都有自己唯一的索引，代表他在原始数据流中的位置
+* Reassembler 类中，持有一个 ByteStream 实例，但只负责往里面 write() 字节，不需要（也不能）用它的读取接口，真正要读的是外部调用者（例如用户程序或 TCP 协议栈上层）
+* 其实就是StreamReassembler接收数据流，比如已经收到了 [10-20],[25-30]，而ByteStream已经写入了排序好的[0-5]，这时候[5-15]的数据到来，那么应该排序[5-20]，之后应该立刻写ByteStream，给StreamReassembler释放空间，中间还涉及到重复数据和丢失数据的处理
